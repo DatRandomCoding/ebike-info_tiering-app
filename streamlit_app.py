@@ -599,7 +599,12 @@ def main():
         profile_form()
         if st.session_state.profile_saved:
             st.session_state.profile_saved = False
-            st.experimental_rerun()
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
+            else:
+                # Streamlit runtime doesn't expose experimental_rerun in this environment.
+                # Rely on normal rerun behaviour triggered by widgets; continue.
+                pass
         return
 
     apply_profile_to_file(active_file)
