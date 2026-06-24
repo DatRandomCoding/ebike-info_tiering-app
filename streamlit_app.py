@@ -7,7 +7,7 @@ st.write("Welcome to the community e-bike library!")
 # 1. Read your master list Excel file
 # Python uses 'pd.read_excel' to open and read your spreadsheet data
 try:
-    master_table = pd.read_excel("your_file_name.xlsx")
+    master_table = pd.read_excel("ebike tier list blank MK1.xlsx")
     
     st.subheader("🏆 Top 10 E-Bikes Leaderboard")
     
