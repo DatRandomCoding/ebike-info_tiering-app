@@ -9,9 +9,23 @@ DEFAULT_FILENAME = "ebike tier list blank MK1.xlsx"
 
 uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
 
+def detect_header_row(excel_source, marker="Rating/5:", max_rows=20):
+    preview = pd.read_excel(excel_source, header=None, nrows=max_rows)
+    for idx, row in preview.iterrows():
+        if marker in row.values:
+            return idx
+    return 0
+
 @st.cache_data
 def load_excel(file):
-    return pd.read_excel(file)
+    # Detect the real header row before loading the full dataset.
+    if hasattr(file, "seek"):
+        file.seek(0)
+        header_row = detect_header_row(file)
+        file.seek(0)
+        return pd.read_excel(file, header=header_row)
+    header_row = detect_header_row(file)
+    return pd.read_excel(file, header=header_row)
 
 master_table = None
 if uploaded_file is not None:
