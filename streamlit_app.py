@@ -32,11 +32,16 @@ CRITICAL_FLAW_MAP = {
     "Yes": "Y",
     "Catastrophic": "C",
 }
+SORT_FLAG_CELLS = {
+    "price": (2, 2),
+    "speed": (2, 3),
+    "range": (2, 4),
+}
+
 SORT_PRIORITY = {
-    "score": {4: True, 5: False, 6: False, 7: False},
-    "speed": {4: False, 5: True, 6: False, 7: False},
-    "range": {4: False, 5: False, 6: True, 7: False},
-    "price": {4: False, 5: False, 6: False, 7: True},
+    "price": {"price": True, "speed": False, "range": False},
+    "speed": {"price": False, "speed": True, "range": False},
+    "range": {"price": False, "speed": False, "range": True},
 }
 
 HEADER_LABELS = {
@@ -377,17 +382,137 @@ def detect_header_row(excel_source, marker="Rating/5:", max_rows=20):
     return 0
 
 
-def set_sort_priority(file_path, priority):
-    if priority not in SORT_PRIORITY:
+def load_sort_flags(file_path):
+    flags = {"price": False, "speed": False, "range": False}
+    try:
+        workbook = load_workbook(file_path)
+        sheet = workbook[workbook.sheetnames[0]]
+        for name, (row, col) in SORT_FLAG_CELLS.items():
+            flags[name] = bool(sheet.cell(row=row, column=col).value)
+        workbook.close()
+    except Exception:
+        pass
+    return flags
+
+
+def set_sort_priority(file_path, flag_name, value):
+    if flag_name not in SORT_FLAG_CELLS:
         return False
     workbook = load_workbook(file_path)
     sheet = workbook[workbook.sheetnames[0]]
-    flags = SORT_PRIORITY[priority]
-    for row_index, value in flags.items():
-        sheet.cell(row=row_index, column=22).value = value
+    row, col = SORT_FLAG_CELLS[flag_name]
+    sheet.cell(row=row, column=col).value = bool(value)
     workbook.save(file_path)
     workbook.close()
     return True
+
+
+def _as_float(value, default=0.0):
+    try:
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _terrain_weight_multiplier(terrain):
+    terrain = str(terrain).strip()
+    if terrain == "Urban":
+        return 0.0
+    if terrain == "Suburban":
+        return 0.015
+    if terrain == "City Hills":
+        return 0.045
+    if terrain == "Trail":
+        return 0.02
+    return 0.005
+
+
+def _terrain_constant(terrain):
+    terrain = str(terrain).strip()
+    return 0.0065 if terrain == "Trail" else 0.005
+
+
+def _compute_speed(row):
+    driving_style = str(row.get("Driving Style", "")).strip()
+    if driving_style == "Class 2":
+        return 20.0
+    if driving_style == "Class 3":
+        return 28.0
+    power = _as_float(row.get("Peak Power", 0.0))
+    bike_weight = _as_float(row.get("Bike Weight", 0.0))
+    rider_weight = _as_float(row.get("Rider Weight", 0.0))
+    total_weight = bike_weight + rider_weight
+    terrain = row.get("Terrain Type", "")
+    extra = _terrain_constant(terrain)
+    terrain_mul = _terrain_weight_multiplier(terrain)
+    base = power * 0.36 - (extra + 0.11 * terrain_mul * total_weight) / 0.018
+    return max(0.0, base ** (1 / 3)) if base > 0 else 0.0
+
+
+def _compute_burn_rate(row, speed):
+    terrain = row.get("Terrain Type", "")
+    if str(terrain).strip() == "":
+        return 0.0
+    bike_weight = _as_float(row.get("Bike Weight", 0.0))
+    rider_weight = _as_float(row.get("Rider Weight", 0.0))
+    total_weight = bike_weight + rider_weight
+    terrain_mul = _terrain_weight_multiplier(terrain)
+    terrain_const = _terrain_constant(terrain)
+    return ((0.018 * speed ** 2) + (terrain_const * total_weight) + (0.11 * total_weight * terrain_mul)) / 0.55
+
+
+def _compute_score(row, speed, range_miles, sort_flags):
+    critical_flaw = str(row.get("Critical Flaw", "")).strip().upper()
+    price = _as_float(row.get("Bike Price", 0.0))
+    if critical_flaw == "C":
+        score = 1.0
+    else:
+        score = ((range_miles / 50.0) + (0.3 if range_miles >= 30 else 0.0))
+        score += ((speed / 28.0) * 2.2 + (0.4 if speed >= 28 else 0.0))
+        score -= price / 1000.0
+        score += 1.6
+        if critical_flaw == "Y":
+            score -= 1.6
+        score = round(score, 2)
+        score = max(1.0, min(5.0, score))
+    if sort_flags.get("price"):
+        score += (10000.0 - price) * 0.000001
+    if sort_flags.get("speed"):
+        score += speed * 0.000001
+    if sort_flags.get("range"):
+        score += range_miles * 0.000001
+    return score
+
+
+def build_leaderboard(file_path):
+    master = load_master_table(file_path)
+    if master is None or master.empty:
+        return pd.DataFrame(columns=["Bike name", "Score", "Price", "Speed", "Range"])
+    sort_flags = load_sort_flags(file_path)
+    df = master.copy()
+    df["Battery Size"] = df["Battery Size"].fillna(df["Battery Voltage"] * df["Battery Amperage"])
+    speeds = []
+    burn_rates = []
+    ranges = []
+    scores = []
+    for _, row in df.iterrows():
+        speed = _compute_speed(row)
+        burn_rate = _compute_burn_rate(row, speed)
+        battery_size = _as_float(row.get("Battery Size", 0.0))
+        range_miles = battery_size / burn_rate if burn_rate > 0 else 0.0
+        score = _compute_score(row, speed, range_miles, sort_flags)
+        speeds.append(round(speed, 1))
+        burn_rates.append(round(burn_rate, 1))
+        ranges.append(round(range_miles, 1))
+        scores.append(round(score, 2))
+    df["Speed"] = speeds
+    df["Range"] = ranges
+    df["Score"] = scores
+    df["Bike name"] = df["Name"].fillna(df["Bike name"])
+    df["Price"] = df["Bike Price"].fillna(df["Price"])
+    return df.sort_values(by=["Score", "Speed", "Range"], ascending=[False, False, False])[["Bike name", "Score", "Price", "Speed", "Range"]]
 
 
 def approve_submission(index, file_path):
@@ -410,6 +535,18 @@ def approve_submission(index, file_path):
         11: submission["nominal_power"],
         12: st.session_state.profile["terrain"],
         13: submission["driving_style"],
+        14: submission["voltage"] * submission["amperage"],
+        15: _compute_burn_rate({
+            "Terrain Type": st.session_state.profile["terrain"],
+            "Bike Weight": submission["bike_weight"],
+            "Rider Weight": st.session_state.profile["weight"],
+        }, _compute_speed({
+            "Driving Style": submission["driving_style"],
+            "Peak Power": submission["peak_power"],
+            "Bike Weight": submission["bike_weight"],
+            "Rider Weight": st.session_state.profile["weight"],
+            "Terrain Type": st.session_state.profile["terrain"],
+        })),
         16: CRITICAL_FLAW_MAP.get(submission["critical_flaw"], "N"),
     }
     write_master_row(file_path, row_num, values)
@@ -491,18 +628,19 @@ def admin_panel(file_path):
                 deny_submission(selected)
                 if hasattr(st, "experimental_rerun"):
                     st.experimental_rerun()
-            if st.button("Add test bike (admin only)", key="add_test_admin"):
-                add_test_ebike(file_path)
-                if hasattr(st, "experimental_rerun"):
-                    st.experimental_rerun()
-            if st.button("View backend (master table)", key="view_backend"):
-                try:
-                    master_table = load_master_table(file_path)
-                    st.write("#### Backend master table")
-                    st.dataframe(master_table)
-                except Exception as e:
-                    st.error(f"Could not read backend file: {e}")
     with right:
+        st.markdown("#### Admin actions")
+        if st.button("Add test bike (admin only)", key="add_test_admin"):
+            add_test_ebike(file_path)
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
+        if st.button("View backend (master table)", key="view_backend"):
+            try:
+                master_table = load_master_table(file_path)
+                st.write("#### Backend master table")
+                st.dataframe(master_table)
+            except Exception as e:
+                st.error(f"Could not read backend file: {e}")
         st.markdown("#### Manual duplicate search")
         query = st.text_input("Search existing master bikes", value=submissions[selected]["name"] if submissions else "")
         master_table = load_master_table(file_path)
@@ -520,17 +658,34 @@ def add_test_ebike(file_path):
         st.error("❌ No available rows in the master table. All 64 bike slots are filled.")
         return False
     try:
+        terrain = st.session_state.profile["terrain"] if st.session_state.profile else "Urban"
+        driving_style = st.session_state.profile.get("driving_style", "Unlocked") if st.session_state.profile else "Unlocked"
+        rider_weight = st.session_state.profile["weight"] if st.session_state.profile else 180
+        voltage = 48
+        amperage = 10
         values = {
             1: "Test Budget eBike",
             3: 800,
             6: 45,
-            7: st.session_state.profile["weight"] if st.session_state.profile else 180,
-            8: 48,
-            9: 10,
+            7: rider_weight,
+            8: voltage,
+            9: amperage,
             10: 750,
             11: 500,
-            12: st.session_state.profile["terrain"] if st.session_state.profile else "Urban",
-            13: st.session_state.profile.get("driving_style", "Unlocked") if st.session_state.profile else "Unlocked",
+            12: terrain,
+            13: driving_style,
+            14: voltage * amperage,
+            15: _compute_burn_rate({
+                "Terrain Type": terrain,
+                "Bike Weight": 45,
+                "Rider Weight": rider_weight,
+            }, _compute_speed({
+                "Driving Style": driving_style,
+                "Peak Power": 750,
+                "Bike Weight": 45,
+                "Rider Weight": rider_weight,
+                "Terrain Type": terrain,
+            })),
             16: "N",
         }
         write_master_row(file_path, row_num, values)
@@ -544,31 +699,38 @@ def add_test_ebike(file_path):
 
 def render_leaderboard(file_path):
     st.subheader("🏆 Top 10 E-Bikes Leaderboard")
-    leaderboard = load_data(file_path)
-    if leaderboard is not None and not leaderboard.empty:
+    flags = load_sort_flags(file_path)
+
+    cols = st.columns([3, 1, 1, 1])
+    with cols[0]:
+        query = st.text_input("Search leaderboard", value="", key="leaderboard_search")
+    with cols[1]:
+        price_flag = st.checkbox("Price", value=flags.get("price", False), key="sort_price")
+    with cols[2]:
+        speed_flag = st.checkbox("Speed", value=flags.get("speed", False), key="sort_speed")
+    with cols[3]:
+        range_flag = st.checkbox("Range", value=flags.get("range", False), key="sort_range")
+
+    if price_flag != flags.get("price", False):
+        set_sort_priority(file_path, "price", price_flag)
+        flags["price"] = price_flag
+    if speed_flag != flags.get("speed", False):
+        set_sort_priority(file_path, "speed", speed_flag)
+        flags["speed"] = speed_flag
+    if range_flag != flags.get("range", False):
+        set_sort_priority(file_path, "range", range_flag)
+        flags["range"] = range_flag
+
+    leaderboard = build_leaderboard(file_path)
+    if query:
+        leaderboard = leaderboard[leaderboard["Bike name"].astype(str).str.contains(query, case=False, na=False)]
+    if not leaderboard.empty:
         display_df = leaderboard.head(10).reset_index(drop=True)
         display_df.index = display_df.index + 1
         st.dataframe(display_df)
     else:
-        st.warning("The workbook contains a summary table template, but no bike rows are populated yet.")
+        st.warning("No leaderboard entries available yet. Approve a bike to populate the scoreboard.")
     st.write("---")
-    cols = st.columns(4)
-    if cols[0].button("Sort by Score"):
-        if set_sort_priority(file_path, "score"):
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-    if cols[1].button("Sort by Speed"):
-        if set_sort_priority(file_path, "speed"):
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-    if cols[2].button("Sort by Range"):
-        if set_sort_priority(file_path, "range"):
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
-    if cols[3].button("Sort by Price"):
-        if set_sort_priority(file_path, "price"):
-            if hasattr(st, "experimental_rerun"):
-                st.experimental_rerun()
 
 
 def profile_form():
@@ -634,12 +796,12 @@ def main():
         theme_choice = st.selectbox("Theme", ["Light", "Dark"], index=0 if st.session_state.theme == "light" else 1)
         st.session_state.theme = "dark" if theme_choice == "Dark" else "light"
 
+    render_leaderboard(active_file)
+
     if st.session_state.show_submission_form:
         submission_form()
 
     admin_panel(active_file)
-    st.write("---")
-    render_leaderboard(active_file)
 
 
 if __name__ == "__main__":
