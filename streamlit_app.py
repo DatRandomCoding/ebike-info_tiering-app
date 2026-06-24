@@ -197,7 +197,74 @@ def detect_header_row(excel_source, marker="Rating/5:", max_rows=20):
     return 0
 
 
+def find_first_empty_bike_row():
+    """Find the first empty row in the master bike table (A5:A68)."""
+    try:
+        workbook = load_workbook(DEFAULT_FILENAME, data_only=True)
+        sheet = workbook[workbook.sheetnames[0]]
+        for row in range(5, 69):
+            name_cell = sheet.cell(row=row, column=1).value
+            if name_cell is None or str(name_cell).strip() == "":
+                return row
+    except Exception:
+        pass
+    return None
+
+
+def add_test_ebike():
+    """Add a test budget eBike to the first available row and populate the leaderboard summary."""
+    row_num = find_first_empty_bike_row()
+    if row_num is None:
+        st.error("No available rows in the master table. All slots are filled.")
+        return False
+
+    try:
+        workbook = load_workbook(DEFAULT_FILENAME)
+        sheet = workbook[workbook.sheetnames[0]]
+
+        # Direct-entry fields only (not calculated fields like top speed or range)
+        test_ebike_data = {
+            1: "Test Budget eBike",  # Column A: Name
+            3: 800,                  # Column C: Bike Price ($)
+            6: 45,                   # Column F: Bike Weight (lbs)
+            7: 180,                  # Column G: Rider Weight (lbs)
+            8: 48,                   # Column H: Battery Voltage (V)
+            9: 10,                   # Column I: Battery Amperage (Ah)
+            10: 750,                 # Column J: Peak Power (W)
+            11: 500,                 # Column K: Nominal Power (W)
+            12: "Urban",             # Column L: Terrain Type
+            13: "Unlocked",          # Column M: Driving Style
+            16: "N",                 # Column P: Has Critical Flaw?
+        }
+
+        for col, value in test_ebike_data.items():
+            sheet.cell(row=row_num, column=col).value = value
+
+        # Also populate the leaderboard summary section (R5:U5) with representative values
+        # This allows testing without needing Excel formula recalculation
+        sheet['R5'].value = "Test Budget eBike"
+        sheet['S5'].value = 3.5  # Representative score
+        sheet['T5'].value = 800  # Price
+        sheet['U5'].value = 3.5  # Score out of 5.01
+
+        workbook.save(DEFAULT_FILENAME)
+        st.success(f"✅ Test eBike added to row {row_num}! Refresh to see it in the leaderboard.")
+        st.cache_data.clear()
+        return True
+
+    except Exception as e:
+        st.error(f"Error adding test eBike: {e}")
+        return False
+
+
 def main():
+    # Add test eBike button in the top left
+    col1, col2, col3 = st.columns([1, 1, 10])
+    with col1:
+        if st.button("➕ Add Test eBike", use_container_width=True):
+            add_test_ebike()
+            st.rerun()
+
     master_table = None
     if uploaded_file is not None:
         try:
