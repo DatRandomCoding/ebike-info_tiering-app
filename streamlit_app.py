@@ -466,7 +466,8 @@ def admin_panel(file_path):
                 if password == ADMIN_PASSWORD:
                     st.session_state.admin_authenticated = True
                     st.success("Admin unlocked.")
-                    st.experimental_rerun()
+                    if hasattr(st, "experimental_rerun"):
+                        st.experimental_rerun()
                 else:
                     st.error("Incorrect password.")
         return
@@ -484,13 +485,23 @@ def admin_panel(file_path):
             st.write(submission)
             if st.button("Approve", key=f"approve_{selected}"):
                 approve_submission(selected, file_path)
-                st.experimental_rerun()
+                if hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
             if st.button("Deny", key=f"deny_{selected}"):
                 deny_submission(selected)
-                st.experimental_rerun()
+                if hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
             if st.button("Add test bike (admin only)", key="add_test_admin"):
                 add_test_ebike(file_path)
-                st.experimental_rerun()
+                if hasattr(st, "experimental_rerun"):
+                    st.experimental_rerun()
+            if st.button("View backend (master table)", key="view_backend"):
+                try:
+                    master_table = load_master_table(file_path)
+                    st.write("#### Backend master table")
+                    st.dataframe(master_table)
+                except Exception as e:
+                    st.error(f"Could not read backend file: {e}")
     with right:
         st.markdown("#### Manual duplicate search")
         query = st.text_input("Search existing master bikes", value=submissions[selected]["name"] if submissions else "")
@@ -544,16 +555,20 @@ def render_leaderboard(file_path):
     cols = st.columns(4)
     if cols[0].button("Sort by Score"):
         if set_sort_priority(file_path, "score"):
-            st.experimental_rerun()
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
     if cols[1].button("Sort by Speed"):
         if set_sort_priority(file_path, "speed"):
-            st.experimental_rerun()
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
     if cols[2].button("Sort by Range"):
         if set_sort_priority(file_path, "range"):
-            st.experimental_rerun()
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
     if cols[3].button("Sort by Price"):
         if set_sort_priority(file_path, "price"):
-            st.experimental_rerun()
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
 
 
 def profile_form():
@@ -580,7 +595,7 @@ def profile_form():
             "driving_style": driving_style,
         }
         st.session_state.profile_saved = True
-        session_file = create_or_get_session_file(st.session_state.get("uploaded_file", None))
+        session_file = create_or_get_session_file(None)
         if session_file:
             apply_profile_to_file(session_file)
 
@@ -589,9 +604,8 @@ def main():
     initialize_session_state()
     st.markdown(theme_css(), unsafe_allow_html=True)
 
-    uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
-    st.session_state.uploaded_file = uploaded_file
-    active_file = create_or_get_session_file(uploaded_file)
+    # Use application default workbook copy (upload removed in deployed app)
+    active_file = create_or_get_session_file(None)
     if active_file is None:
         return
 
