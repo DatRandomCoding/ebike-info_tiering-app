@@ -68,6 +68,8 @@ def initialize_session_state():
         st.session_state.admin_authenticated = False
     if "session_id" not in st.session_state:
         st.session_state.session_id = uuid.uuid4().hex
+    if "profile_saved" not in st.session_state:
+        st.session_state.profile_saved = False
     if "uploaded_filename" not in st.session_state:
         st.session_state.uploaded_filename = None
     if "session_file" not in st.session_state:
@@ -90,6 +92,7 @@ def theme_css():
                 background-color: #2563eb !important;
                 color: white !important;
             }
+            label { color: #f8fafc !important; }
         </style>
         """
     return """
@@ -102,6 +105,7 @@ def theme_css():
                 background-color: #0f62fe !important;
                 color: white !important;
             }
+            label { color: #0f1720 !important; }
         </style>
         """
 
@@ -204,6 +208,9 @@ def apply_profile_to_file(file_path):
         if name_value is not None and str(name_value).strip() != "":
             sheet.cell(row=row, column=7).value = profile["weight"]
             sheet.cell(row=row, column=12).value = profile["terrain"]
+            # Apply driving style derived from user profile
+            if "driving_style" in profile:
+                sheet.cell(row=row, column=13).value = profile["driving_style"]
     workbook.save(file_path)
     workbook.close()
 
@@ -512,7 +519,7 @@ def add_test_ebike(file_path):
             10: 750,
             11: 500,
             12: st.session_state.profile["terrain"] if st.session_state.profile else "Urban",
-            13: "Unlocked",
+            13: st.session_state.profile.get("driving_style", "Unlocked") if st.session_state.profile else "Unlocked",
             16: "N",
         }
         write_master_row(file_path, row_num, values)
@@ -552,20 +559,30 @@ def render_leaderboard(file_path):
 def profile_form():
     st.header("Welcome — set your rider profile")
     with st.form("profile_form"):
-        weight = st.number_input("Your weight (lbs)", min_value=1, max_value=500, value=180)
-        terrain = st.selectbox("Preferred terrain", ["Urban", "Suburban", "Trail"])
-        target_speed = st.number_input("Target speed (mph)", min_value=1, max_value=80, value=20)
+        weight = st.number_input("Input user weight (lbs)", min_value=1, max_value=500, value=180)
+        terrain = st.selectbox("Select riding terrain", ["Urban", "Suburban", "Trail"])
+        target_speed = st.number_input("Target speed (mph)", min_value=1, max_value=120, value=20)
+        st.markdown("_Driving style will be inferred from target speed (<=20 → Class 2, <=28 → Class 3, >28 → Unlocked)_")
         submit = st.form_submit_button("Save profile")
     if submit:
+        # derive driving style from target speed
+        if target_speed <= 20:
+            driving_style = "Class 2"
+        elif target_speed <= 28:
+            driving_style = "Class 3"
+        else:
+            driving_style = "Unlocked"
+
         st.session_state.profile = {
             "weight": weight,
             "terrain": terrain,
             "target_speed": target_speed,
+            "driving_style": driving_style,
         }
+        st.session_state.profile_saved = True
         session_file = create_or_get_session_file(st.session_state.get("uploaded_file", None))
         if session_file:
             apply_profile_to_file(session_file)
-        st.experimental_rerun()
 
 
 def main():
@@ -580,6 +597,9 @@ def main():
 
     if st.session_state.profile is None:
         profile_form()
+        if st.session_state.profile_saved:
+            st.session_state.profile_saved = False
+            st.experimental_rerun()
         return
 
     apply_profile_to_file(active_file)
