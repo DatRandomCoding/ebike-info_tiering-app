@@ -211,11 +211,30 @@ def find_first_empty_bike_row():
     return None
 
 
+def find_first_empty_summary_row():
+    """Find the first empty row in the leaderboard summary section (R5:R14)."""
+    try:
+        workbook = load_workbook(DEFAULT_FILENAME, data_only=True)
+        sheet = workbook[workbook.sheetnames[0]]
+        for row in range(5, 15):  # Summary is rows 5-14 (top 10)
+            name_cell = sheet.cell(row=row, column=18).value  # Column R
+            if name_cell is None or str(name_cell).strip() == "":
+                return row
+    except Exception:
+        pass
+    return None
+
+
 def add_test_ebike():
     """Add a test budget eBike to the first available row and populate the leaderboard summary."""
     row_num = find_first_empty_bike_row()
     if row_num is None:
         st.error("No available rows in the master table. All slots are filled.")
+        return False
+
+    summary_row = find_first_empty_summary_row()
+    if summary_row is None:
+        st.warning("⚠️ Leaderboard is full. The Excel file limits the leaderboard to 10 bikes.")
         return False
 
     try:
@@ -240,15 +259,14 @@ def add_test_ebike():
         for col, value in test_ebike_data.items():
             sheet.cell(row=row_num, column=col).value = value
 
-        # Also populate the leaderboard summary section (R5:U5) with representative values
-        # This allows testing without needing Excel formula recalculation
-        sheet['R5'].value = "Test Budget eBike"
-        sheet['S5'].value = 3.5  # Representative score
-        sheet['T5'].value = 800  # Price
-        sheet['U5'].value = 3.5  # Score out of 5.01
+        # Populate the leaderboard summary section at the first available row
+        sheet.cell(row=summary_row, column=18).value = "Test Budget eBike"  # Column R: Bike name
+        sheet.cell(row=summary_row, column=19).value = 3.5  # Column S: Unweighted Score
+        sheet.cell(row=summary_row, column=20).value = 800  # Column T: Price
+        sheet.cell(row=summary_row, column=21).value = 3.5  # Column U: Score out of 5.01
 
         workbook.save(DEFAULT_FILENAME)
-        st.success(f"✅ Test eBike added to row {row_num}! Refresh to see it in the leaderboard.")
+        st.success(f"✅ Test eBike #{summary_row - 4} added! Refresh to see it in the leaderboard.")
         st.cache_data.clear()
         return True
 
